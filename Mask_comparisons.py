@@ -120,12 +120,12 @@ def remove_double_candidates(L1, L2, thresh=0.25): #takes 2 label arrays, remove
     return L1new, count
 
 
-#%% load in images
+#%% load in masks
 Ig = io.imread('synthetic bacteria images/real images for cycleGAN/testing images/flat7_avg4_edit_014_cp_manual_masks.png')
 I1 = io.imread('synthetic bacteria images/real images for cycleGAN/testing images/flat7_avg4_edit_014_cp_omni35_masks.png')
 I2 = io.imread('synthetic bacteria images/real images for cycleGAN/testing images/flat7_avg4_edit_014_cp_synth_masks.png')
 
-#%% remove small cells
+#%% remove small cells (normally skipped, only necessary for images with many small false positives)
 
 I1b = remove_small_cells(I1,50)
 I2b = remove_small_cells(I2,50)
@@ -228,26 +228,73 @@ def batch_comparison(input_folder):
 
     return IoU_arr, IoUs_bf, IoUs_syn, stats
 
+def batch_comparison2(input_folder, cutoff): #comparison between 3 models (omni, symbac, and synthetic)
+    Imgs = sorted(list(search_for_files('.tif', input_folder)))
+    Imgs_G = sorted(list(search_for_files('man', input_folder)))
+    Imgs_bf = sorted(list(search_for_files('omni', input_folder)))
+    Imgs_sb = sorted(list(search_for_files('symbac', input_folder)))
+    Imgs_syn = sorted(list(search_for_files('synth', input_folder)))
+
+    IoU_arr = np.empty(shape = (len(Imgs_G),3), dtype=np.ndarray)
+    stats = np.empty(shape = (len(Imgs_G),3,8))
+            
+    for i, (Ig_name, I1_name, I2_name, I3_name) in enumerate(zip(Imgs_G, Imgs_bf, Imgs_sb, Imgs_syn)):
+        Ig = io.imread(os.path.join(input_folder, Ig_name))
+        I1 = io.imread(os.path.join(input_folder, I1_name))
+        I2 = io.imread(os.path.join(input_folder, I2_name))
+        I3 = io.imread(os.path.join(input_folder, I3_name))
+
+        #I1 = remove_small_cells(I1, 50)
+        #I2 = remove_small_cells(I2, 50)
+        #I3 = remove_small_cells(I3, 50)
+
+        Ig = reorder_labels(Ig)
+        I1 = reorder_labels(I1)
+        I2 = reorder_labels(I2)
+        I3 = reorder_labels(I3)
+
+        IoU_arr[i,0], stats[i,0,7], stats[i,0,6], stats[i,0,5], counts_bf = find_seg_candidates2(Ig, I1, cutoff)
+        IoU_arr[i,1], stats[i,1,7], stats[i,1,6], stats[i,1,5], counts_sb = find_seg_candidates2(Ig, I2, cutoff)
+        IoU_arr[i,2], stats[i,2,7], stats[i,2,6], stats[i,2,5], counts_s = find_seg_candidates2(Ig, I3, cutoff)
+
+        stats[i,0,0:4] = counts_bf
+        stats[i,1,0:4] = counts_sb
+        stats[i,2,0:4] = counts_s
+
+        stats[i,0,4] = len(np.unique(I1)) - 1
+        stats[i,1,4] = len(np.unique(I2)) - 1
+        stats[i,2,4] = len(np.unique(I3)) - 1
+
+    IoUs_bf = np.hstack(IoU_arr[:,0])
+    #IoUs_bf.flatten()
+    IoUs_sb = np.hstack(IoU_arr[:,1])
+    IoUs_syn = np.hstack(IoU_arr[:,2])
+    #IoUs_syn.flatten()
+
+    return IoU_arr, IoUs_bf, IoUs_sb, IoUs_syn, np.nan_to_num(stats)
+
 #%%
 input_folder = 'K:/404-internal-Bac3Dmonolayers-VincentHickl-2023/synthetic bacteria images/real images for cycleGAN/testing images/cropped/'
 
-IoU_arr, IoUs_bf, IoUs_syn, stats = batch_comparison(input_folder)
+IoU_arr, IoUs_bf, IoUs_syn, stats = batch_comparison2(input_folder)
 
-#%%
+#%% Plot IoU distributions for the different models
 fig, ax = plt.subplots(1,1)
 
-ax.hist(IoUs_bf, bins=20, edgecolor = "black", label = "Bact_fluor_omni", alpha = 0.8)
-ax.hist(IoUs_syn, bins=20, edgecolor = "black", label = "Synthetic model", alpha = 0.8)
+ax.hist(IoUs_bf, bins=20, edgecolor = "black", label = "Bact_fluor_omni", alpha = 0.55)
+ax.hist(IoUs_sb, bins=20, edgecolor = "black", label = "Symbac model", alpha = 0.55)
+ax.hist(IoUs_syn, bins=20, edgecolor = "black", label = "Synthetic model", alpha = 0.55)
 ax = plt.gca()
 plt.xlabel('Intersection over union')
 plt.ylabel('cell count')
 ax.legend(loc='upper right')
-#fig.savefig("IoU_hist.svg", format = 'svg', dpi=300)
+#fig.savefig("IoU_hist_new.svg", format = 'svg', dpi=300)
 plt.show()
 
-#%%
+#%% calculate and display segmentation statistics
+
 num_imgs = len(stats)
-norm_stats = np.zeros((num_imgs,2), dtype = np.ndarray)
+norm_stats = np.zeros((num_imgs,3), dtype = np.ndarray)
 for i in range(num_imgs):
     for j in range(len(stats[0])):
         norm_stats[i,j] = np.divide(stats[i,j,0:5], stats[i,j][0])
@@ -255,12 +302,14 @@ for i in range(num_imgs):
 stat_names = ("Cells found", "TP", "FP", "FN", "PQ")
 stat_means = {
     'Bact_fluor_omni': (np.mean([x[4] for x in norm_stats[:,0]]), np.mean([x[1] for x in norm_stats[:,0]]), np.mean([x[2] for x in norm_stats[:,0]]), np.mean([x[3] for x in norm_stats[:,0]]), np.mean(stats[:,0,7])),
-    'Synthetic model': (np.mean([x[4] for x in norm_stats[:,1]]), np.mean([x[1] for x in norm_stats[:,1]]), np.mean([x[2] for x in norm_stats[:,1]]), np.mean([x[3] for x in norm_stats[:,1]]), np.mean(stats[:,1,7]))
+    'Symbac model': (np.mean([x[4] for x in norm_stats[:,1]]), np.mean([x[1] for x in norm_stats[:,1]]), np.mean([x[2] for x in norm_stats[:,1]]), np.mean([x[3] for x in norm_stats[:,1]]), np.mean(stats[:,1,7])),
+    'Synthetic model': (np.mean([x[4] for x in norm_stats[:,2]]), np.mean([x[1] for x in norm_stats[:,2]]), np.mean([x[2] for x in norm_stats[:,2]]), np.mean([x[3] for x in norm_stats[:,2]]), np.mean(stats[:,2,7]))
 }
 
 stat_sterr = {
     'Bact_fluor_omni': (np.std([x[4] for x in norm_stats[:,0]])/math.sqrt(num_imgs), np.std([x[1] for x in norm_stats[:,0]])/math.sqrt(num_imgs), np.std([x[2] for x in norm_stats[:,0]])/math.sqrt(num_imgs), np.std([x[3] for x in norm_stats[:,0]])/math.sqrt(num_imgs), np.std(stats[:,0,7])/math.sqrt(num_imgs)),
-    'Synthetic model': (np.std([x[4] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[1] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[2] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[3] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std(stats[:,1,7])/math.sqrt(num_imgs))
+    'Symbac model': (np.std([x[4] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[1] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[2] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std([x[3] for x in norm_stats[:,1]])/math.sqrt(num_imgs), np.std(stats[:,1,7])/math.sqrt(num_imgs)),
+    'Synthetic model': (np.std([x[4] for x in norm_stats[:,2]])/math.sqrt(num_imgs), np.std([x[1] for x in norm_stats[:,2]])/math.sqrt(num_imgs), np.std([x[2] for x in norm_stats[:,2]])/math.sqrt(num_imgs), np.std([x[3] for x in norm_stats[:,2]])/math.sqrt(num_imgs), np.std(stats[:,2,7])/math.sqrt(num_imgs))
 }
 
 x = np.arange(len(stat_names))  # the label locations
@@ -271,7 +320,8 @@ fig, ax = plt.subplots(layout='constrained')
 
 for attribute, measurement in stat_means.items():
     offset = width * multiplier
-    rects = ax.bar(x + offset, measurement, width, label=attribute, align='edge', yerr = [2.18*x for x in stat_sterr.get(attribute)[:]], capsize = 3)
+    #zscores for stars: 1.77, 2.65, 3.852 (one-sided t test)
+    rects = ax.bar(x + offset, measurement, width, label=attribute, align='edge', yerr = [x for x in stat_sterr.get(attribute)[:]], capsize = 3)
     ax.bar_label(rects, padding=3, fmt='\n%.2f')
     multiplier += 1
 
@@ -280,10 +330,31 @@ ax.set_ylabel('Proportion of cells')
 #ax.set_title('Penguin attributes by species')
 ax.set_xticks(x + width, stat_names)
 ax.legend(loc='upper right', ncols=3)
-ax.set_ylim(0, 1.15)
-#fig.savefig("seg_stats.svg", format = 'svg', dpi=300)
+#ax.set_ylim(0, 1.15)
+#fig.savefig("seg_stats_new.svg", format = 'svg', dpi=300)
 
 plt.show()
+
+#%% PQ vs cutoff curve
+num_points = 50
+
+PQs = np.zeros((num_points,3))
+cutoffs = np.linspace(0.1,1,num_points)
+for i,co in enumerate(cutoffs):
+    IoU_arr, IoUs_bf, IoUs_sb, IoUs_syn, stats = batch_comparison2(input_folder, co)
+    PQs[i,0] = np.mean(stats[:,0,7])
+    PQs[i,1] = np.mean(stats[:,1,7])
+    PQs[i,2] = np.mean(stats[:,2,7])
+
+plt.plot(cutoffs, PQs[:,0], label = 'Bact_fluor_omni')
+plt.plot(cutoffs, PQs[:,1], label = 'Symbac model')
+plt.plot(cutoffs, PQs[:,2], label = 'Synthetic model')
+plt.plot(0.5*np.ones(10), np.linspace(0,0.75,10), '--')
+plt.legend()
+plt.xlabel('IoU cutoff')
+plt.ylabel('Panoptic quality')
+#plt.savefig("K:/404-internal-Bac3Dmonolayers-VincentHickl-2023/Multispecies 2D segmentation paper figures/PQ_vs_cutoff_new.eps", format = 'eps', dpi=600)
+plt.show
 
 #%% MIXED batch processing functions
     
@@ -335,7 +406,7 @@ input_folder = 'K:/404-internal-Bac3Dmonolayers-VincentHickl-2023/07.03.24/Pa Sa
 
 IoU_arr, IoUs_c, IoUs_r, stats = batch_comparison(input_folder)
 
-#%%
+#%% Plot IoU distributions for the two species
 fig, ax = plt.subplots(1,1)
 
 ax.hist(IoUs_c, bins=20, edgecolor = "black", label = "S. aureus", alpha = 0.8)
@@ -347,7 +418,7 @@ ax.legend(loc='upper right')
 #fig.savefig("IoU_hist.svg", format = 'svg', dpi=300)
 plt.show()
 
-#%%
+#%% calculate and plot segmentation statistics
 num_imgs = len(stats)
 norm_stats = np.zeros((num_imgs,2), dtype = np.ndarray)
 for i in range(num_imgs):
